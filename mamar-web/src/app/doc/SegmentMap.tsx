@@ -1,5 +1,8 @@
+import { View } from "@adobe/react-spectrum"
 import classNames from "classnames"
-import { useId, useRef } from "react"
+import type { Event } from "pm64-typegen"
+import { Track } from "pm64-typegen"
+import { useId, useDeferredValue, useRef, memo, startTransition } from "react"
 
 import Ruler, { ticksToStyle, useSegmentLengths } from "./Ruler"
 import styles from "./SegmentMap.module.scss"
@@ -7,28 +10,36 @@ import { TimeProvider } from "./timectx"
 
 import TrackControls from "../emu/TrackControls"
 import { useBgm, useDoc, useVariation } from "../store"
+import { getSegmentId } from "../store/segment"
 import useSelection, { SelectionProvider } from "../util/hooks/useSelection"
 
 const TRACK_HEAD_WIDTH = 100 // Match with $trackHead-width
 
+function hasParentTrack({ polyphony }: Track): boolean {
+    return typeof polyphony === "object" && "Link" in polyphony
+}
+
 function PianoRollThumbnail({ trackIndex, trackListIndex }: { trackIndex: number, trackListIndex: number }) {
     const [doc, dispatch] = useDoc()
     const [bgm] = useBgm()
-    const track = bgm?.trackLists[trackListIndex]?.tracks[trackIndex]
+    const track = bgm?.track_lists[trackListIndex]?.tracks[trackIndex]
     const isSelected = doc?.panelContent.type === "tracker" && doc?.panelContent.trackList === trackListIndex && doc?.panelContent.track === trackIndex
     const nameId = useId()
+    const commands = useDeferredValue(track?.commands)
 
-    if (!track || track.commands.vec.length === 0) {
+    if (!track || track.commands.length === 0) {
         return <></>
     } else {
         const handlePress = (evt: any) => {
-            dispatch({
-                type: "set_panel_content",
-                panelContent: isSelected ? { type: "not_open" } : {
-                    type: "tracker",
-                    trackList: trackListIndex,
-                    track: trackIndex,
-                },
+            startTransition(() => {
+                dispatch({
+                    type: "set_panel_content",
+                    panelContent: isSelected ? { type: "not_open" } : {
+                        type: "tracker",
+                        trackList: trackListIndex,
+                        track: trackIndex,
+                    },
+                })
             })
             evt.stopPropagation()
             evt.preventDefault()
@@ -39,9 +50,9 @@ function PianoRollThumbnail({ trackIndex, trackListIndex }: { trackIndex: number
             aria-labelledby={nameId}
             className={classNames({
                 [styles.pianoRollThumbnail]: true,
-                [styles.drumRegion]: track.isDrumTrack,
-                [styles.disabledRegion]: track.isDisabled,
-                [styles.hasInterestingParentTrack]: track.parentTrackIdx !== 0,
+                [styles.drumRegion]: track.is_drum_track,
+                [styles.disabledRegion]: track.is_disabled,
+                [styles.hasInterestingParentTrack]: hasParentTrack(track),
                 [styles.selected]: isSelected,
             })}
             onClick={handlePress}
@@ -51,6 +62,7 @@ function PianoRollThumbnail({ trackIndex, trackListIndex }: { trackIndex: number
                 }
             }}
         >
+            {commands && <Thumbnail commands={commands} />}
             <div id={nameId} className={styles.segmentName}>{track.name}</div>
         </div>
     }
@@ -61,6 +73,65 @@ function TrackName({ index }: { index: number }) {
         {index === 0 ? "Master" : `Track ${index}`}
     </div>
 }
+
+const Thumbnail = memo(({ commands }: { commands: Event[] }) => {
+    // Preferred musical range so segments can be compared by their pitch range
+    const c2 = 107 + 36
+    const c5 = 107 + 72
+
+    // Determine pitch range
+    let minPitch = 256
+    let maxPitch = 0
+    let hasNoteInRange = false
+    for (const command of commands) {
+        if ("Note" in command) {
+            minPitch = Math.min(minPitch, command.Note.pitch)
+            maxPitch = Math.max(maxPitch, command.Note.pitch)
+
+            if (command.Note.pitch >= c2 && command.Note.pitch <= c5) {
+                hasNoteInRange = true
+            }
+        }
+    }
+
+    // Prefer C2-C5 range, but if there are no notes there, center on where the notes are
+    if (hasNoteInRange) {
+        minPitch = c2
+        maxPitch = c5
+    } else {
+        const middle = Math.floor((minPitch + maxPitch) / 2)
+        const size = c5 - c2 + 1
+        minPitch = middle - Math.floor(size / 2)
+        maxPitch = middle + Math.floor(size / 2)
+    }
+
+    // Render each note as an svg <rect>
+    const notes = []
+    let time = 0
+    for (const command of commands) {
+        if ("Note" in command) {
+            notes.push(<rect
+                key={command.id}
+                x={time}
+                y={command.Note.pitch - minPitch}
+                width={command.Note.length}
+                height={1}
+            />)
+        } else if ("Delay" in command) {
+            time += command.Delay
+        }
+    }
+
+    // Display the whole used range
+    const height = maxPitch - minPitch + 1
+    const viewBox = `0 0 ${time} ${height}`
+
+    return <svg viewBox={viewBox} preserveAspectRatio="none">
+        <g transform={`translate(0, ${height}) scale(1,-1)`}>
+            {notes}
+        </g>
+    </svg>
+})
 
 function Container() {
     const [variation] = useVariation()
@@ -107,15 +178,19 @@ function Container() {
                         {i > 0 && <TrackControls trackIndex={i} />}
                     </div>}
                     {variation.segments.map((segment, segmentIndex) => {
-                        if (segment.type === "Subseg") {
-                            return <div
-                                key={segment.id}
-                                style={ticksToStyle(segmentLengths[segmentIndex])}
+                        if ("Subseg" in segment) {
+                            return <View
+                                key={segment.Subseg.id}
+                                colorVersion={6}
+                                UNSAFE_style={ticksToStyle(segmentLengths[segmentIndex])}
                             >
-                                <PianoRollThumbnail trackIndex={i} trackListIndex={segment.trackList} />
-                            </div>
+                                <PianoRollThumbnail trackIndex={i} trackListIndex={segment.Subseg.track_list} />
+                            </View>
                         } else {
-                            return <div key={segment.id} />
+                            const id = getSegmentId(segment)
+                            console.assert(id != null, "Segment", segment, "does not have an ID")
+
+                            return <div key={id} />
                         }
                     })}
                 </div>)}
