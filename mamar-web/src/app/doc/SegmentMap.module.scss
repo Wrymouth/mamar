@@ -11,6 +11,7 @@ $trackHeight: 70px;
     grid-template-columns: 225px auto;
 
     overflow-y: auto;
+    scrollbar-width: none;
 }
 
 .track {
@@ -61,6 +62,8 @@ $trackHeight: 70px;
     height: $trackHeight;
 
     position: relative; // for svg
+
+    cursor: pointer;
 
     &:focus-visible {
         outline: 3px solid var(--spectrum-gray-500);

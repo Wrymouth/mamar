@@ -186,7 +186,7 @@ export default function Ruler() {
 
         if (currentLoop !== null) {
             // Consume all segments that are part of this loop
-            let numSegmentsInLoop = 0
+            let numSegmentsInLoop = 1
             while (!("EndLoop" in segments[i + 1])) {
                 length += segmentLengths[++i]
                 numSegmentsInLoop++
@@ -217,7 +217,7 @@ export default function Ruler() {
         <TimeGrid className={styles.loops}>
             {elements}
         </TimeGrid>
-        <TimeGrid className={styles.bars}>
+        <TimeGrid className={styles.bars} dragToScroll={{ axis: "none", button: 0, thresholdPx: 0 }}>
             <Playhead />
             {bars}
         </TimeGrid>

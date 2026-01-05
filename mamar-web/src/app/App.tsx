@@ -2,6 +2,7 @@ import { Provider as SpectrumProvider, defaultTheme, Grid, View } from "@adobe/r
 import { useEffect } from "react"
 
 import styles from "./App.module.scss"
+import { PlayheadContextProvider } from "./doc/Playhead"
 import PlaybackControls from "./emu/PlaybackControls"
 import Header from "./header/Header"
 import Main from "./Main"
@@ -24,15 +25,17 @@ export function RomDataConsumer() {
             rows={["auto", "1fr"]}
             height="100vh"
         >
-            <View gridArea="header">
-                <Header />
-            </View>
-            <div className={styles.playbackControlsContainer}>
-                <PlaybackControls />
-            </div>
-            <View gridArea="content">
-                <Main />
-            </View>
+            <PlayheadContextProvider>
+                <View gridArea="header">
+                    <Header />
+                </View>
+                <div className={styles.playbackControlsContainer}>
+                    <PlaybackControls />
+                </div>
+                <View gridArea="content">
+                    <Main />
+                </View>
+            </PlayheadContextProvider>
         </Grid>
     </MupenProvider>
 }

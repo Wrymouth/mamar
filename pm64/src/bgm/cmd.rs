@@ -5,7 +5,10 @@ use std::ops::Range;
 use serde_derive::{Deserialize, Serialize};
 use typescript_type_def::TypeDef;
 
-use crate::id::{gen_id, Id};
+use crate::{
+    bgm::PatchAddress,
+    id::{Id, gen_id},
+};
 
 /// A contiguous sequence of [commands](Command) ordered by relative-time.
 /// Insertion and lookup is performed via a relative-time key.
@@ -280,9 +283,26 @@ impl CommandSeq {
         self.vec
             .retain(|event| !matches!(event.command, Command::Delay(0) | Command::Note { length: 0, .. }));
 
-        // TODO: combine redundant subsequences (e.g. multiple Delay, multiple MasterTempo without a delay between)
+        if self.vec.is_empty() {
+            return;
+        }
 
-        self.vec.shrink_to_fit();
+        // Combine contiguous Delay commands
+        let mut i = 0;
+        while i < self.vec.len() - 1 {
+            if let Command::Delay(delay) = self.vec[i].command {
+                if let Command::Delay(next_delay) = self.vec[i + 1].command {
+                    self.vec[i].command = Command::Delay(delay + next_delay);
+                    self.vec.remove(i + 1);
+                } else {
+                    i += 1;
+                }
+            } else {
+                i += 1;
+            }
+        }
+
+        // TODO: combine redundant stateful subsequences e.g. MasterTempo .. MasterTempo with no delay inbetween
     }
 
     /// Appends the given [Command] to the end of the sequence.
@@ -521,8 +541,64 @@ impl CommandSeq {
             return Default::default();
         };
 
-        let commands = self.vec.split_off(idx + 1); // +1 so that End is left on self
-        CommandSeq { vec: commands }
+        let mut after_time = CommandSeq {
+            vec: self.vec.split_off(idx + 1), // +1 so that End is left on self
+        };
+
+        // Persist stateful events
+        let setup = {
+            let mut stateful_events = Vec::new();
+            for event in self.vec.iter() {
+                if let Event {
+                    command:
+                        Command::SetTrackVoice { .. }
+                        | Command::TrackOverridePatch(_)
+                        | Command::SubTrackCoarseTune(_)
+                        | Command::SubTrackFineTune(_)
+                        | Command::SubTrackPan(_)
+                        | Command::SubTrackReverb(_)
+                        | Command::SubTrackReverbType { .. }
+                        | Command::SubTrackVolume(..)
+                        | Command::Marker { .. }, // TODO: only if used
+                    ..
+                } = event
+                {
+                    stateful_events.push(event.clone())
+                }
+            }
+            let mut seq = CommandSeq { vec: stateful_events };
+            seq.shrink();
+            seq.vec
+        };
+        after_time.insert_many_start(0, setup);
+        after_time
+    }
+
+    /// Zeroes delays and notes before `time` as if the sequence started `time` ticks earlier.
+    pub fn fast_forward(&mut self, time: usize) {
+        let mut remaining = time;
+        for event in self.vec.iter_mut() {
+            match &mut event.command {
+                Command::Delay(delay) => {
+                    if remaining >= *delay {
+                        remaining -= *delay;
+                        *delay = 0;
+                    } else {
+                        *delay -= remaining;
+                        remaining = 0;
+                    }
+                }
+                Command::Note { length, velocity, .. } => {
+                    *length = 0;
+                    *velocity = 0;
+                }
+                _ => {}
+            }
+
+            if remaining == 0 {
+                break;
+            }
+        }
     }
 }
 
@@ -611,11 +687,8 @@ pub enum Command {
     },
 
     // command E7 unused
-    /// Sets the bank/patch of this track, overriding its [super::Voice].
-    TrackOverridePatch {
-        bank: u8,
-        patch: u8,
-    },
+    /// Sets the patch of this track, overriding its [super::Instrument].
+    TrackOverridePatch(PatchAddress),
 
     /// Sets the volume for this track only. Resets at the end of the [super::Subsegment].
     SubTrackVolume(u8),
